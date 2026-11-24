@@ -49,6 +49,8 @@ Usage: hacek [OPTIONS]
 
 /// Time for the application to handle a backspace before text is committed.
 const BACKSPACE_GRACE: Duration = Duration::from_millis(20);
+/// How long text waits for a text field that went away to come back.
+const REFOCUS_GRACE: Duration = Duration::from_millis(100);
 const KEY_BACKSPACE: u32 = 14;
 const KEY_LEFT: u32 = 105;
 const KEY_RIGHT: u32 = 106;
@@ -184,6 +186,8 @@ struct App {
     mods: (u32, u32, u32, u32),
     pending: Field,
     field: Field,
+    /// Whether the surrounding text was told after the last key press.
+    field_is_fresh: bool,
     serial: u32,
     scale: i32,
     shown: Option<(Vec<char>, Option<usize>)>,
@@ -225,7 +229,8 @@ impl App {
     }
 
     fn replace(&mut self, old: char, new: char) {
-        let in_text = self.field.surrounding.as_ref().is_some_and(|(text, cursor, anchor)| {
+        // Chrome does not report text typed with keys, so what it told before may be out of date.
+        let in_text = self.field_is_fresh && self.field.surrounding.as_ref().is_some_and(|(text, cursor, anchor)| {
             cursor == anchor && text.get(..*cursor).is_some_and(|t| t.ends_with(old))
         });
         if in_text {
@@ -268,6 +273,9 @@ impl App {
             Input::Key { code, down } => {
                 let actions = if down {
                     let press = self.press(code);
+                    if press.meaning != Meaning::Modifier && self.shown.is_none() {
+                        self.field_is_fresh = false;
+                    }
                     self.engine.press(press, Instant::now())
                 } else {
                     self.engine.release(code)
@@ -288,6 +296,10 @@ impl App {
         let now = Instant::now();
         if let Some((c, _)) = self.late_commit.filter(|(_, at)| now >= *at) {
             self.late_commit = None;
+            if !self.field.active {
+                self.queued.clear();
+                return;
+            }
             self.commit(c);
             while self.late_commit.is_none() {
                 let Some(input) = self.queued.pop_front() else { break };
@@ -373,10 +385,15 @@ impl App {
 
     fn apply_field(&mut self) {
         let was = self.field.active;
+        if self.field.surrounding != self.pending.surrounding {
+            self.field_is_fresh = true;
+        }
         self.field = self.pending.clone();
         if was && !self.field.active {
-            self.late_commit = None;
-            self.queued.clear();
+            // Some web editors (Quill) lose and regain focus when the backspace empties them.
+            if let Some((_, at)) = &mut self.late_commit {
+                *at = Instant::now() + REFOCUS_GRACE;
+            }
             let actions = self.engine.reset();
             self.run(actions);
             let (_, _, locked, group) = self.mods;
@@ -388,6 +405,9 @@ impl App {
             }
         } else if !was && self.field.active {
             self.grab = Some(self.im.grab_keyboard(&self.qh, ()));
+            if let Some((_, at)) = &mut self.late_commit {
+                *at = Instant::now() + BACKSPACE_GRACE;
+            }
         }
     }
 
@@ -637,6 +657,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         mods: (0, 0, 0, 0),
         pending: Field::default(),
         field: Field::default(),
+        field_is_fresh: false,
         serial: 0,
         scale: 1,
         shown: None,
