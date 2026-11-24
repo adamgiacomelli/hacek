@@ -1,0 +1,21 @@
+pkgbase = hacek
+	pkgdesc = Hold a letter, get its accented variants: a press-and-hold accent menu for Wayland
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/adamgiacomelli/hacek
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = cargo
+	depends = cairo
+	depends = gcc-libs
+	depends = glib2
+	depends = glibc
+	depends = libxkbcommon
+	depends = pango
+	depends = xkeyboard-config
+	options = !lto
+	source = hacek-0.1.0.tar.gz::https://github.com/adamgiacomelli/hacek/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 65f187504d58bb1c925aaf19a3feab083e76336055d8ddd61605d75c6463e1cc
+
+pkgname = hacek
