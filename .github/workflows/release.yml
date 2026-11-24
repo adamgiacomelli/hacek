@@ -1,0 +1,27 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libpango1.0-dev libcairo2-dev libxkbcommon-dev xkb-data dpkg-dev
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Check that the tag matches the version
+        run: grep -qx "version = \"${TAG#v}\"" Cargo.toml
+      - run: cargo test --locked
+      - run: cargo install cargo-deb --locked
+      - run: cargo deb --locked
+      - name: Try the package
+        run: |
+          dpkg-deb --info target/debian/*.deb
+          sudo apt-get install -y ./target/debian/*.deb
+          test "$(hacek --layout si --list | wc -l)" = 4
+      - run: gh release create "$TAG" --title "hacek $TAG" --generate-notes target/debian/*.deb

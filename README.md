@@ -1,5 +1,7 @@
 # hacek
 
+[![Tests](https://github.com/adamgiacomelli/hacek/actions/workflows/test.yml/badge.svg)](https://github.com/adamgiacomelli/hacek/actions/workflows/test.yml)
+
 Hold a letter, get its accented variants: the macOS press-and-hold accent menu, for Wayland.
 
 ![Menu with č and ć, numbered 1 and 2](docs/screenshot.png)
@@ -23,11 +25,10 @@ Arch Linux package:
 
     cd packaging/arch && makepkg -si
 
-Debian/Ubuntu package, built on the release it is meant for:
+Ubuntu 24.04 and later: download the `.deb` from
+[Releases](https://github.com/adamgiacomelli/hacek/releases), then
 
-    sudo apt install libpango1.0-dev libcairo2-dev libxkbcommon-dev
-    cargo install cargo-deb && cargo deb
-    sudo apt install ./target/debian/hacek_*.deb
+    sudo apt install ./hacek_*.deb
 
 ## Use
 

@@ -1,0 +1,24 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libpango1.0-dev libcairo2-dev libxkbcommon-dev xkb-data
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: cargo test --locked
+  e2e:
+    runs-on: ubuntu-24.04
+    # Arch, for a current Sway
+    container: archlinux:latest
+    timeout-minutes: 30
+    steps:
+      - run: pacman -Syu --noconfirm --needed base-devel git rust pango cairo libxkbcommon xkeyboard-config sway swaybg foot pyside6 ttf-dejavu
+      - uses: actions/checkout@v4
+      - run: cargo test --locked --test e2e -- --ignored
