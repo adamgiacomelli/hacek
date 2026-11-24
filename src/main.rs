@@ -50,6 +50,8 @@ Usage: hacek [OPTIONS]
 /// Time for the application to handle a backspace before text is committed.
 const BACKSPACE_GRACE: Duration = Duration::from_millis(20);
 const KEY_BACKSPACE: u32 = 14;
+const KEY_LEFT: u32 = 105;
+const KEY_RIGHT: u32 = 106;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Position {
@@ -130,6 +132,7 @@ fn options() -> Result<Options, String> {
 struct Field {
     active: bool,
     secret: bool,
+    url: bool,
     /// Text around the cursor, with cursor and anchor byte offsets.
     surrounding: Option<(String, usize, usize)>,
 }
@@ -228,16 +231,27 @@ impl App {
         if in_text {
             self.im.delete_surrounding_text(old.len_utf8() as u32, 0);
             self.commit(new);
+        } else if self.field.url {
+            // Address bars complete what is typed and select the completion, so a backspace would
+            // delete just that. Text replaces the selection; then remove the letter before it.
+            self.commit(new);
+            self.tap_plain(&[KEY_LEFT, KEY_BACKSPACE, KEY_RIGHT]);
         } else {
             // Terminals and others that do not share their text.
-            // Shift+Backspace and friends mean other things, so drop modifiers meanwhile.
-            let (depressed, latched, locked, group) = self.mods;
-            self.vk.modifiers(0, 0, locked, group);
-            self.key(KEY_BACKSPACE, true);
-            self.key(KEY_BACKSPACE, false);
-            self.vk.modifiers(depressed, latched, locked, group);
+            self.tap_plain(&[KEY_BACKSPACE]);
             self.late_commit = Some((new, Instant::now() + BACKSPACE_GRACE));
         }
+    }
+
+    /// Tap keys without modifiers, as Shift+Backspace and friends mean other things.
+    fn tap_plain(&self, codes: &[u32]) {
+        let (depressed, latched, locked, group) = self.mods;
+        self.vk.modifiers(0, 0, locked, group);
+        for code in codes {
+            self.key(*code, true);
+            self.key(*code, false);
+        }
+        self.vk.modifiers(depressed, latched, locked, group);
     }
 
     fn commit(&self, c: char) {
@@ -462,6 +476,7 @@ impl Dispatch<im::ZwpInputMethodV2, ()> for App {
                     purpose,
                     WEnum::Value(ContentPurpose::Password | ContentPurpose::Pin)
                 );
+                app.pending.url = matches!(purpose, WEnum::Value(ContentPurpose::Url));
             }
             im::Event::Done => {
                 app.serial = app.serial.wrapping_add(1);

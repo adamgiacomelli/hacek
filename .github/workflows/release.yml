@@ -52,7 +52,7 @@ jobs:
           cd /home/builder/pkg
           sed -i "s/^pkgver=.*/pkgver=${TAG#v}/; s/^options=.*/options=(!lto !debug)/" PKGBUILD
           runuser -u builder -- updpkgsums
-          runuser -u builder -- makepkg
+          runuser -u builder -- env PACKAGER="hacek release <noreply@github.com>" makepkg
       - name: Try the package
         run: |
           pacman -U --noconfirm /home/builder/pkg/hacek-*.pkg.tar.zst

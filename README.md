@@ -4,7 +4,7 @@
 
 Hold a letter, get its accented variants: the macOS press-and-hold accent menu, for Wayland.
 
-![Menu with č and ć, numbered 1 and 2](docs/screenshot.png)
+<img src="docs/screenshot.png" width="180" alt="Menu under the letter c with č and ć, numbered 1 and 2">
 
 Named after the *háček*, the little hook on č, š and ž.
 
