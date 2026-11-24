@@ -2,10 +2,17 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Build the Arch package for a release that exists
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v0.1.0
+        required: true
 permissions:
   contents: write
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
@@ -25,3 +32,29 @@ jobs:
           sudo apt-get install -y ./target/debian/*.deb
           test "$(hacek --layout si --list | wc -l)" = 4
       - run: gh release create "$TAG" --title "hacek $TAG" --generate-notes target/debian/*.deb
+
+  arch:
+    needs: release
+    if: ${{ !cancelled() && needs.release.result != 'failure' }}
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - run: pacman -Syu --noconfirm --needed base-devel git github-cli pacman-contrib rust pango cairo libxkbcommon xkeyboard-config
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          useradd -m builder
+          install -d -o builder /home/builder/pkg
+          install -o builder -m644 packaging/arch/PKGBUILD /home/builder/pkg
+          cd /home/builder/pkg
+          sed -i "s/^pkgver=.*/pkgver=${TAG#v}/; s/^options=.*/options=(!lto !debug)/" PKGBUILD
+          runuser -u builder -- updpkgsums
+          runuser -u builder -- makepkg
+      - name: Try the package
+        run: |
+          pacman -U --noconfirm /home/builder/pkg/hacek-*.pkg.tar.zst
+          test "$(hacek --layout si --list | wc -l)" = 4
+      - run: gh release upload "$TAG" --clobber --repo "$GITHUB_REPOSITORY" /home/builder/pkg/hacek-*.pkg.tar.zst

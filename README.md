@@ -21,9 +21,12 @@ From source (needs Rust, Pango, Cairo and libxkbcommon):
 
     cargo install --path .
 
-Arch Linux package:
+Arch Linux: download the `.pkg.tar.zst` from
+[Releases](https://github.com/adamgiacomelli/hacek/releases), then
 
-    cd packaging/arch && makepkg -si
+    sudo pacman -U ./hacek-*.pkg.tar.zst
+
+or build it with `cd packaging/arch && makepkg -si`.
 
 Ubuntu 24.04 and later: download the `.deb` from
 [Releases](https://github.com/adamgiacomelli/hacek/releases), then
