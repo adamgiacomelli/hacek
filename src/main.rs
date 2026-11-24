@@ -9,13 +9,13 @@ use std::io::Write;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::FileExt;
 use std::time::{Duration, Instant};
-use wayland_client::backend::WaylandError;
+use wayland_client::backend::{ObjectId, WaylandError};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_keyboard::KeymapFormat, wl_region, wl_registry, wl_seat, wl_shm,
+    wl_buffer, wl_callback, wl_compositor, wl_keyboard::KeymapFormat, wl_region, wl_registry, wl_seat, wl_shm,
     wl_shm_pool, wl_surface,
 };
-use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle, WEnum};
+use wayland_client::{delegate_noop, Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ContentPurpose;
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_keyboard_grab_v2 as grab, zwp_input_method_manager_v2 as im_manager,
@@ -40,7 +40,8 @@ Usage: hacek [OPTIONS]
   -d, --delay MS        how long to hold (default 400)
       --altgr           include letters that layouts keep behind AltGr
   -p, --position WHERE  bottom (default), center or top of the screen, or caret: under the
-                        letter, or over it when there is no room. caret is EXPERIMENTAL:
+                        letter, or over it when there is no room (bottom if the
+                        application does not say where that is). caret is EXPERIMENTAL:
                         bugs in Sway 1.12 (swaywm/sway#9343) can crash the session
       --list            print the variants from --layout and --extra, then exit
   -h, --help            show this help
@@ -141,7 +142,8 @@ enum Input {
 
 enum Role {
     Layer { layer: layer_surface::ZwlrLayerSurfaceV1, configured: bool },
-    Caret(im_popup::ZwpInputPopupSurfaceV2),
+    /// `placed` once the compositor has said where the text cursor is.
+    Caret { popup: im_popup::ZwpInputPopupSurfaceV2, placed: bool },
 }
 
 /// The menu on screen. Exists only while the menu is open.
@@ -154,17 +156,18 @@ impl Drop for Window {
     fn drop(&mut self) {
         match &self.role {
             Role::Layer { layer, .. } => layer.destroy(),
-            Role::Caret(popup) => popup.destroy(),
+            Role::Caret { popup, .. } => popup.destroy(),
         }
         self.surface.destroy();
     }
 }
 
 struct App {
+    conn: Connection,
     qh: QueueHandle<App>,
     shm: wl_shm::WlShm,
     compositor: wl_compositor::WlCompositor,
-    layers: Option<layer_shell::ZwlrLayerShellV1>,
+    layers: layer_shell::ZwlrLayerShellV1,
     window: Option<Window>,
     im: im::ZwpInputMethodV2,
     vk: vk::ZwpVirtualKeyboardV1,
@@ -201,7 +204,7 @@ impl App {
                 Action::Show(variants, selected) => {
                     self.shown = Some((variants, selected));
                     if self.window.is_none() {
-                        self.window = Some(self.open());
+                        self.open(self.options.position == Position::Caret);
                     }
                     self.redraw();
                 }
@@ -285,38 +288,48 @@ impl App {
         self.engine.deadline().into_iter().chain(self.late_commit.map(|l| l.1)).min()
     }
 
-    fn open(&self) -> Window {
+    fn open(&mut self, at_caret: bool) {
         let surface = self.compositor.create_surface(&self.qh, ());
         let region = self.compositor.create_region(&self.qh, ());
         surface.set_input_region(Some(&region)); // clicks go through
         region.destroy();
-        let role = match &self.layers {
-            Some(layers) => {
-                let layer = layers.get_layer_surface(
-                    &surface, None, layer_shell::Layer::Overlay, "hacek".into(), &self.qh, (),
-                );
-                let n = self.shown.as_ref().map_or(0, |s| s.0.len());
-                let (w, h) = popup::size(n);
-                layer.set_size(w as u32, h as u32);
-                layer.set_anchor(match self.options.position {
-                    Position::Bottom => layer_surface::Anchor::Bottom,
-                    Position::Top => layer_surface::Anchor::Top,
-                    Position::Center | Position::Caret => layer_surface::Anchor::empty(),
-                });
-                layer.set_margin(100, 0, 100, 0);
-                surface.commit();
-                Role::Layer { layer, configured: false }
+        let (w, h) = popup::size(self.shown.as_ref().map_or(0, |s| s.0.len()));
+        let role = if at_caret {
+            let popup = self.im.get_input_popup_surface(&surface, &self.qh, ());
+            // Some text fields, like Chrome's address bar, do not tell where their cursor is, and
+            // the menu may land off screen. So show nothing until the position is known, and
+            // if it is not after this round trip, do without.
+            let blank = popup::Image { width: w, height: h, stride: w * 4, data: vec![0; (w * h * 4) as usize] };
+            if let Err(e) = self.attach(&surface, &blank, 1) {
+                eprintln!("hacek: cannot open the menu: {e}");
             }
-            None => Role::Caret(self.im.get_input_popup_surface(&surface, &self.qh, ())),
+            self.conn.display().sync(&self.qh, surface.id());
+            Role::Caret { popup, placed: false }
+        } else {
+            let layer = self.layers.get_layer_surface(
+                &surface, None, layer_shell::Layer::Overlay, "hacek".into(), &self.qh, (),
+            );
+            layer.set_size(w as u32, h as u32);
+            layer.set_anchor(match self.options.position {
+                Position::Bottom | Position::Caret => layer_surface::Anchor::Bottom,
+                Position::Top => layer_surface::Anchor::Top,
+                Position::Center => layer_surface::Anchor::empty(),
+            });
+            layer.set_margin(100, 0, 100, 0);
+            surface.commit();
+            Role::Layer { layer, configured: false }
         };
-        Window { surface, role }
+        self.window = Some(Window { surface, role });
     }
 
     fn redraw(&self) {
         let (Some((variants, selected)), Some(window)) = (&self.shown, &self.window) else {
             return;
         };
-        if matches!(window.role, Role::Layer { configured: false, .. }) {
+        if matches!(
+            window.role,
+            Role::Layer { configured: false, .. } | Role::Caret { placed: false, .. }
+        ) {
             return;
         }
         if let Err(e) = self.draw(&window.surface, variants, *selected) {
@@ -326,13 +339,18 @@ impl App {
 
     fn draw(&self, surface: &wl_surface::WlSurface, variants: &[char], selected: Option<usize>) -> Result<(), Box<dyn std::error::Error>> {
         let image = popup::draw(variants, selected, self.scale)?;
+        self.attach(surface, &image, self.scale)?;
+        Ok(())
+    }
+
+    fn attach(&self, surface: &wl_surface::WlSurface, image: &popup::Image, scale: i32) -> std::io::Result<()> {
         let fd = memfd(&image.data)?;
         let pool = self.shm.create_pool(fd.as_fd(), image.data.len() as i32, &self.qh, ());
         let buffer = pool.create_buffer(
             0, image.width, image.height, image.stride, wl_shm::Format::Argb8888, &self.qh, (),
         );
         pool.destroy();
-        surface.set_buffer_scale(self.scale);
+        surface.set_buffer_scale(scale);
         surface.attach(Some(&buffer), 0, 0);
         surface.damage_buffer(0, 0, image.width, image.height);
         surface.commit();
@@ -502,6 +520,28 @@ impl Dispatch<layer_surface::ZwlrLayerSurfaceV1, ()> for App {
     }
 }
 
+impl Dispatch<im_popup::ZwpInputPopupSurfaceV2, ()> for App {
+    fn event(app: &mut Self, proxy: &im_popup::ZwpInputPopupSurfaceV2, _: im_popup::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        // The only event is the position of the text cursor.
+        if let Some(Window { role: Role::Caret { popup, placed }, .. }) = &mut app.window {
+            if popup == proxy && !*placed {
+                *placed = true;
+                app.redraw();
+            }
+        }
+    }
+}
+
+impl Dispatch<wl_callback::WlCallback, ObjectId> for App {
+    fn event(app: &mut Self, _: &wl_callback::WlCallback, _: wl_callback::Event, id: &ObjectId, _: &Connection, _: &QueueHandle<Self>) {
+        if let Some(Window { surface, role: Role::Caret { placed: false, .. } }) = &app.window {
+            if surface.id() == *id {
+                app.open(false);
+            }
+        }
+    }
+}
+
 impl Dispatch<wl_surface::WlSurface, ()> for App {
     fn event(app: &mut Self, _: &wl_surface::WlSurface, event: wl_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let wl_surface::Event::PreferredBufferScale { factor } = event {
@@ -532,7 +572,6 @@ delegate_noop!(App: ignore wl_shm::WlShm);
 delegate_noop!(App: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(App: ignore layer_shell::ZwlrLayerShellV1);
 delegate_noop!(App: ignore im_manager::ZwpInputMethodManagerV2);
-delegate_noop!(App: ignore im_popup::ZwpInputPopupSurfaceV2);
 delegate_noop!(App: ignore vk_manager::ZwpVirtualKeyboardManagerV1);
 delegate_noop!(App: ignore vk::ZwpVirtualKeyboardV1);
 
@@ -558,16 +597,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ())?;
     let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ())?;
 
-    let layers = if options.position == Position::Caret {
-        None
-    } else {
-        Some(globals.bind(&qh, 1..=1, ()).map_err(|_| "this compositor lacks layer-shell")?)
-    };
+    let layers: layer_shell::ZwlrLayerShellV1 =
+        globals.bind(&qh, 1..=1, ()).map_err(|_| "this compositor lacks layer-shell")?;
 
     let im = manager.get_input_method(&seat, &qh, ());
     let vk = vks.create_virtual_keyboard(&seat, &qh, ());
 
     let mut app = App {
+        conn: conn.clone(),
         qh,
         shm,
         compositor,

@@ -58,7 +58,8 @@ It cannot run next to fcitx5 or ibus, as a seat has one input method.
 In terminals, letters with variants do not repeat when held, also not in vim.
 
 `--position` puts the menu at the `bottom` (default), `center` or `top` of the screen, or at the
-`caret`: under the letter, or over it when there is no room. `caret` is experimental. Bugs in
+`caret`: under the letter, or over it when there is no room. Fields that do not say where their
+cursor is, like Chrome's address bar, get it at the bottom of the screen instead. `caret` is experimental. Bugs in
 Sway's input popups ([#9343](https://github.com/swaywm/sway/issues/9343),
 [#8541](https://github.com/swaywm/sway/issues/8541)) crash Sway 1.12, and your session with it, for
 instance when a GTK or Qt window closes while the menu is open.
