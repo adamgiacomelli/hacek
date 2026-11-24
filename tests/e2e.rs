@@ -108,6 +108,10 @@ struct Desktop {
 
 impl Desktop {
     fn new() -> Self {
+        Self::with(&[])
+    }
+
+    fn with(options: &[&str]) -> Self {
         // The tests depend on timing, so one at a time.
         static TURN: Mutex<()> = Mutex::new(());
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
@@ -149,7 +153,7 @@ impl Desktop {
             ready.ends_with('\n').then(|| ready.split(' ').next().unwrap().to_string())
         });
         let keyboard = Keyboard::new(&dir.join(&display));
-        let hacek = client(&dir, env!("CARGO_BIN_EXE_hacek")).args(["-l", "si"]).spawn().unwrap();
+        let hacek = client(&dir, env!("CARGO_BIN_EXE_hacek")).args(["-l", "si"]).args(options).spawn().unwrap();
         sleep(Duration::from_millis(500));
         Desktop { dir, sway, hacek, keyboard, apps: vec![], _turn: turn }
     }
@@ -177,7 +181,7 @@ impl Desktop {
     fn swaymsg(&self, command: &str) {
         let ready = fs::read_to_string(self.dir.join("ready")).unwrap();
         let socket = ready.trim().split(' ').nth(1).unwrap();
-        let ok = Command::new("swaymsg").args(["-q", "-s", socket, command]).status().unwrap();
+        let ok = Command::new("swaymsg").args(["-q", "-s", socket, "--", command]).status().unwrap();
         assert!(ok.success());
     }
 
@@ -385,6 +389,47 @@ fn keyboard_works_after_hacek_is_killed() {
     d.keyboard.tap(N1);
     d.keyboard.tap(X);
     assert_eq!(d.typed("a"), "c1x\n");
+}
+
+/// Focus changes and the like just as the menu opens. hacek once took a partly received
+/// Wayland message for a lost connection and quit.
+#[test]
+#[ignore = "needs sway and foot"]
+fn survives_upheaval() {
+    let commands = [
+        "focus left",
+        "focus right",
+        "output HEADLESS-1 scale 2",
+        "output HEADLESS-1 scale 1",
+        "output HEADLESS-1 power off",
+        "output HEADLESS-1 power on",
+        "workspace 2",
+        "workspace 1",
+        "input * xkb_layout 'us,si'",
+        "input * xkb_layout us",
+    ];
+    let mut d = Desktop::new();
+    d.terminal("a");
+    d.terminal("b");
+    for (i, command) in commands.iter().cycle().take(30).enumerate() {
+        d.keyboard.hold([C, S, D, Z][i % 4], if i % 5 == 0 { 405 } else { 430 });
+        d.swaymsg(command);
+        d.keyboard.tap([N1, N9, ESC, RIGHT][i % 4]);
+        d.assert_alive();
+    }
+}
+
+#[test]
+#[ignore = "needs sway and foot"]
+fn every_position_works() {
+    for position in ["top", "center", "caret"] {
+        let mut d = Desktop::with(&["--position", position]);
+        d.terminal("a");
+        d.keyboard.hold(C, LONG);
+        d.keyboard.tap(N1);
+        assert_eq!(d.typed("a"), "č\n", "{position}");
+        d.assert_alive();
+    }
 }
 
 #[test]

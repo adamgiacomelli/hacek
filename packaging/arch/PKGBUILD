@@ -1,0 +1,42 @@
+# Maintainer: Adam Giacomelli <8747447+adamgiacomelli@users.noreply.github.com>
+pkgname=hacek-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Hold a letter, get its accented variants: a press-and-hold accent menu for Wayland'
+arch=(x86_64 aarch64)
+url='https://github.com/adamgiacomelli/hacek'
+license=(MIT)
+depends=(cairo gcc-libs glib2 glibc libxkbcommon pango xkeyboard-config)
+makedepends=(cargo git)
+provides=(hacek)
+conflicts=(hacek)
+options=(!lto)
+source=("git+$url.git")
+sha256sums=(SKIP)
+
+pkgver() {
+    cd hacek
+    printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd hacek
+    cargo fetch --locked
+}
+
+build() {
+    cd hacek
+    CARGO_TARGET_DIR=target cargo build --frozen --release
+}
+
+check() {
+    cd hacek
+    CARGO_TARGET_DIR=target cargo test --frozen --release
+}
+
+package() {
+    cd hacek
+    install -Dm755 target/release/hacek -t "$pkgdir/usr/bin"
+    install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+    install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname"
+}

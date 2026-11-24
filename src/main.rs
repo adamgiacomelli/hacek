@@ -4,10 +4,12 @@ use hacek::engine::{Action, Engine, Meaning, Press};
 use hacek::variants::{layout_keymap, Variants};
 use std::collections::VecDeque;
 use std::fs::File;
+use std::io::ErrorKind::WouldBlock;
 use std::io::Write;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::FileExt;
 use std::time::{Duration, Instant};
+use wayland_client::backend::WaylandError;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard::KeymapFormat, wl_region, wl_registry, wl_seat, wl_shm,
@@ -37,9 +39,9 @@ Usage: hacek [OPTIONS]
   -x, --extra X=VARS    add variants by hand, e.g. e=éèê; repeatable
   -d, --delay MS        how long to hold (default 400)
       --altgr           include letters that layouts keep behind AltGr
-      --at-caret        put the menu at the text cursor instead of the bottom of the
-                        screen. EXPERIMENTAL: Sway 1.12 can crash, taking the session
-                        with it, when the text field is inside a popup
+  -p, --position WHERE  bottom (default), center or top of the screen, or caret: under the
+                        letter, or over it when there is no room. caret is EXPERIMENTAL:
+                        bugs in Sway 1.12 (swaywm/sway#9343) can crash the session
       --list            print the variants from --layout and --extra, then exit
   -h, --help            show this help
   -V, --version         show the version";
@@ -48,11 +50,19 @@ Usage: hacek [OPTIONS]
 const BACKSPACE_GRACE: Duration = Duration::from_millis(20);
 const KEY_BACKSPACE: u32 = 14;
 
+#[derive(Clone, Copy, PartialEq)]
+enum Position {
+    Bottom,
+    Center,
+    Top,
+    Caret,
+}
+
 struct Options {
     configured: Variants,
     altgr: bool,
     delay: Duration,
-    at_caret: bool,
+    position: Position,
     list: bool,
 }
 
@@ -61,7 +71,7 @@ fn options() -> Result<Options, String> {
         configured: Variants::default(),
         altgr: false,
         delay: Duration::from_millis(400),
-        at_caret: false,
+        position: Position::Bottom,
         list: false,
     };
     let (mut layouts, mut extras) = (vec![], vec![]);
@@ -76,7 +86,15 @@ fn options() -> Result<Options, String> {
                 o.delay = Duration::from_millis(ms);
             }
             "--altgr" => o.altgr = true,
-            "--at-caret" => o.at_caret = true,
+            "-p" | "--position" => {
+                o.position = match value()?.as_str() {
+                    "bottom" => Position::Bottom,
+                    "center" => Position::Center,
+                    "top" => Position::Top,
+                    "caret" => Position::Caret,
+                    other => return Err(format!("no such position: {other}")),
+                }
+            }
             "--list" => o.list = true,
             "-h" | "--help" => {
                 println!("{HELP}");
@@ -280,8 +298,12 @@ impl App {
                 let n = self.shown.as_ref().map_or(0, |s| s.0.len());
                 let (w, h) = popup::size(n);
                 layer.set_size(w as u32, h as u32);
-                layer.set_anchor(layer_surface::Anchor::Bottom);
-                layer.set_margin(0, 0, 100, 0);
+                layer.set_anchor(match self.options.position {
+                    Position::Bottom => layer_surface::Anchor::Bottom,
+                    Position::Top => layer_surface::Anchor::Top,
+                    Position::Center | Position::Caret => layer_surface::Anchor::empty(),
+                });
+                layer.set_margin(100, 0, 100, 0);
                 surface.commit();
                 Role::Layer { layer, configured: false }
             }
@@ -536,7 +558,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ())?;
     let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ())?;
 
-    let layers = if options.at_caret {
+    let layers = if options.position == Position::Caret {
         None
     } else {
         Some(globals.bind(&qh, 1..=1, ()).map_err(|_| "this compositor lacks layer-shell")?)
@@ -577,19 +599,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(e) = app.fatal.take() {
             return Err(e.into());
         }
-        conn.flush()?;
+        let mut events = rustix::event::PollFlags::IN;
+        match conn.flush() {
+            Err(WaylandError::Io(e)) if e.kind() == WouldBlock => {
+                events |= rustix::event::PollFlags::OUT;
+            }
+            result => result?,
+        }
         let Some(guard) = queue.prepare_read() else { continue };
         let timeout = app.deadline().map(|at| {
             let left = at.saturating_duration_since(Instant::now());
             rustix::event::Timespec { tv_sec: left.as_secs() as _, tv_nsec: left.subsec_nanos() as _ }
         });
         let fd = guard.connection_fd();
-        let mut fds = [rustix::event::PollFd::new(&fd, rustix::event::PollFlags::IN)];
+        let mut fds = [rustix::event::PollFd::new(&fd, events)];
         match rustix::event::poll(&mut fds, timeout.as_ref()) {
             Ok(0) | Err(rustix::io::Errno::INTR) => {}
-            Ok(_) => {
-                guard.read()?;
-            }
+            // A readable socket need not hold a complete message yet.
+            Ok(_) => match guard.read() {
+                Err(WaylandError::Io(e)) if e.kind() == WouldBlock => {}
+                result => {
+                    result?;
+                }
+            },
             Err(e) => return Err(e.into()),
         }
     }

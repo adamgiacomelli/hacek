@@ -54,6 +54,7 @@ fn bad_options() {
     fails(&["--nope"], "unknown option --nope");
     fails(&["--layout"], "--layout needs a value");
     fails(&["--layout", "no_such_layout", "--list"], "no such keyboard layout");
+    fails(&["--position", "moon"], "no such position: moon");
     fails(&["--delay", "soon"], "milliseconds");
     fails(&["--extra", "éè", "--list"], "e=éè");
     fails(&["--extra", "ab=éè", "--list"], "single letter");

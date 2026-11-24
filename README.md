@@ -15,15 +15,25 @@ Named after the *háček*, the little hook on č, š and ž.
 
 ## Install
 
-Needs Rust, Pango, Cairo and libxkbcommon.
+From source (needs Rust, Pango, Cairo and libxkbcommon):
 
     cargo install --path .
+
+Arch Linux package:
+
+    cd packaging/arch && makepkg -si
+
+Debian/Ubuntu package, built on the release it is meant for:
+
+    sudo apt install libpango1.0-dev libcairo2-dev libxkbcommon-dev
+    cargo install cargo-deb && cargo deb
+    sudo apt install ./target/debian/hacek_*.deb
 
 ## Use
 
     hacek --layout si
 
-In Sway's config (with `~/.cargo/bin` on the PATH Sway sees, or the full path):
+In Sway's config (after `cargo install`, use the full path if Sway's PATH lacks `~/.cargo/bin`):
 
     exec hacek --layout si
 
@@ -47,8 +57,11 @@ It cannot run next to fcitx5 or ibus, as a seat has one input method.
 
 In terminals, letters with variants do not repeat when held, also not in vim.
 
-`--at-caret` puts the menu at the text cursor. It can crash Sway 1.12, and your session with it,
-because of a bug in Sway's input popup handling (`input_popup_set_focus`).
+`--position` puts the menu at the `bottom` (default), `center` or `top` of the screen, or at the
+`caret`: under the letter, or over it when there is no room. `caret` is experimental. Bugs in
+Sway's input popups ([#9343](https://github.com/swaywm/sway/issues/9343),
+[#8541](https://github.com/swaywm/sway/issues/8541)) crash Sway 1.12, and your session with it, for
+instance when a GTK or Qt window closes while the menu is open.
 
 ## Develop
 

@@ -3,6 +3,8 @@ name = "hacek"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/adamgiacomelli/hacek"
+readme = "README.md"
 description = "Hold a letter, get its accented variants: a press-and-hold accent menu for Wayland"
 keywords = ["wayland", "accents", "diacritics", "input-method", "keyboard"]
 
@@ -17,3 +19,12 @@ pangocairo = "0.22"
 pango = "0.22"
 cairo-rs = "0.22"
 rustix = { version = "1", features = ["event", "fs", "mm"] }
+
+[package.metadata.deb]
+maintainer = "Adam Giacomelli <8747447+adamgiacomelli@users.noreply.github.com>"
+section = "utils"
+depends = "$auto, xkb-data"
+assets = [
+    ["target/release/hacek", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/hacek/", "644"],
+]
