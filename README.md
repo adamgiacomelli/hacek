@@ -52,7 +52,10 @@ because of a bug in Sway's input popup handling (`input_popup_set_focus`).
 
 ## Develop
 
-`cargo test` covers the state machine and variant detection. `cargo run --example type` is a fake
-keyboard for end-to-end tests in a nested compositor.
+    cargo test                             # state machine, variants, command line
+    cargo test --test e2e -- --ignored     # real applications
+
+The second runs hacek in a private headless Sway with a fake keyboard, away from your session.
+It needs Sway, foot and PySide6.
 
 MIT licensed.
